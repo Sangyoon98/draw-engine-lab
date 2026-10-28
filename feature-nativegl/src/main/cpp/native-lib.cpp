@@ -269,8 +269,10 @@ JNIF(onDrawFrame)(JNIEnv*, jobject) {
     glUniform2f(g_uVp, g_vpW, g_vpH);
     glUniform1f(g_uScale, g_scale);
     glUniform2f(g_uOff, g_offX, g_offY);
+    // g_current is already inside g_strokes (pushed in down()), so the loop
+    // draws the in-progress stroke too — drawing it again here would double-blend
+    // translucent pens (highlighter looked darker while wet, lighter on release).
     for (const auto& s : g_strokes) drawStroke(s);
-    if (g_current) drawStroke(*g_current);
 }
 
 JNIF(setPen)(JNIEnv*, jobject, jint pen) { g_pen = pen; }
