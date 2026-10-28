@@ -1,8 +1,7 @@
 package com.example.drawenginelab.ink
 
 import android.graphics.Matrix
-import android.opengl.EGL14
-import android.os.Build
+import android.os.SystemClock
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -21,8 +20,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.withFrameMillis
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -37,7 +37,6 @@ import androidx.compose.ui.graphics.drawscope.Stroke as DrawStroke
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
-import androidx.ink.authoring.compose.InProgressStrokes
 import androidx.ink.brush.Brush
 import androidx.ink.brush.InputToolType
 import androidx.ink.brush.StockBrushes
@@ -47,6 +46,8 @@ import androidx.ink.rendering.android.canvas.CanvasStrokeRenderer
 import androidx.ink.strokes.InProgressStroke
 import androidx.ink.strokes.MutableStrokeInputBatch
 import androidx.ink.strokes.Stroke
+import androidx.ink.strokes.StrokeInput
+import androidx.compose.ui.platform.LocalContext
 import com.example.drawenginelab.core.ColorDot
 import com.example.drawenginelab.core.PALETTE
 import com.example.drawenginelab.core.SIZES
@@ -59,27 +60,6 @@ import com.example.drawenginelab.core.handleAir
 import com.example.drawenginelab.core.rememberSPen
 
 private const val ERASE_PAD = 30f
-
-/**
- * Ink's "low-latency" wet rendering is a front-buffer layer; on devices without
- * front-buffer support the in-progress stroke stays invisible until it commits.
- * That support is exactly the EGL display extensions below (plus API 29+ for the
- * SurfaceControl path), so we probe them once and branch the wet path:
- *  - supported  → [InProgressStrokes] (true low-latency front buffer)
- *  - otherwise  → [FallbackWetLayer] (same renderer + brush on a normal Canvas;
- *                 one frame of latency, but visible everywhere and identical to dry)
- */
-private val frontBufferSupported: Boolean by lazy {
-    if (Build.VERSION.SDK_INT < 29) return@lazy false
-    val display = EGL14.eglGetDisplay(EGL14.EGL_DEFAULT_DISPLAY)
-    if (display == EGL14.EGL_NO_DISPLAY) return@lazy false
-    val ver = IntArray(2)
-    if (!EGL14.eglInitialize(display, ver, 0, ver, 1)) return@lazy false
-    val ext = EGL14.eglQueryString(display, EGL14.EGL_EXTENSIONS).orEmpty()
-    // don't eglTerminate — it's the shared default display
-    ext.contains("EGL_ANDROID_front_buffer_auto_refresh") &&
-        ext.contains("EGL_KHR_mutable_render_buffer")
-}
 
 enum class InkPen(val label: String) {
     PEN("펜"),
@@ -186,17 +166,13 @@ fun InkCanvas(
                     )
                 },
             )
-            else -> if (frontBufferSupported) {
-                key(brush) {
-                    InProgressStrokes(
-                        defaultBrush = brush,
-                        nextBrush = { brush },
-                        onStrokesFinished = { finished -> finished.forEach { state.addStroke(it) } },
-                    )
-                }
-            } else {
-                FallbackWetLayer(brush, renderer, identity) { state.addStroke(it) }
-            }
+            // Ink's low-latency wet layer is a front buffer; whether it actually
+            // displays varies by GPU/driver even when the EGL extensions are
+            // advertised (e.g. SM-P610 advertises them but shows nothing until the
+            // stroke commits). No reliable runtime probe exists, so we always render
+            // the wet stroke ourselves with the same renderer + brush — visible on
+            // every device and identical to the dry stroke, at ~1 frame of latency.
+            else -> FallbackWetLayer(brush, renderer, identity) { state.addStroke(it) }
         }
     }
 }
@@ -220,18 +196,48 @@ private fun FallbackWetLayer(
     val inProgress = remember { InProgressStroke() }
     var version by remember { mutableStateOf(0) }
     var active by remember { mutableStateOf(false) }
+    // Ink requires one constant stroke_unit_length (physical cm per coordinate unit)
+    // across a whole stroke; leaving it unset makes Ink derive a per-input value that
+    // varies and throws. Mirror the official view: one density-derived value for all.
+    val ctx = LocalContext.current
+    val cmPerUnit = remember(ctx) { 2.54f / ctx.resources.displayMetrics.densityDpi.coerceAtLeast(1) }
+    val startMs = remember { longArrayOf(0L) }
+    val lastMs = remember { longArrayOf(-1L) }
+
+    // Ink's stroke model evolves over real time (it smooths/settles toward the input).
+    // The official view steps it every frame; if we only step on input events the wet
+    // line lags and snaps into place late ("worm" effect). So advance updateShape each
+    // frame while drawing, using real elapsed ms (same clock as the input timestamps).
+    LaunchedEffect(active) {
+        while (active) {
+            withFrameMillis { }
+            inProgress.updateShape(SystemClock.uptimeMillis() - startMs[0])
+            version++
+        }
+    }
 
     Box(
         Modifier.fillMaxSize().pointerInput(brush) {
             awaitEachGesture {
                 val down = awaitFirstDown(requireUnconsumed = false)
                 inProgress.start(brush)
-                var t = 0L
+                startMs[0] = SystemClock.uptimeMillis()
+                lastMs[0] = -1L
                 fun push(x: Float, y: Float, pressure: Float) {
+                    var e = SystemClock.uptimeMillis() - startMs[0]
+                    if (e <= lastMs[0]) e = lastMs[0] + 1 // Ink needs strictly increasing times
+                    lastMs[0] = e
                     val batch = MutableStrokeInputBatch()
-                    batch.add(InputToolType.TOUCH, x, y, t, pressure.coerceIn(0.05f, 1f))
+                    batch.add(
+                        StrokeInput.create(
+                            x, y, e, InputToolType.TOUCH,
+                            cmPerUnit, // strokeUnitLengthCm — must be constant across the stroke
+                            pressure.coerceIn(0.05f, 1f),
+                            StrokeInput.NO_TILT, StrokeInput.NO_ORIENTATION,
+                        ),
+                    )
                     inProgress.enqueueInputs(batch, MutableStrokeInputBatch())
-                    inProgress.updateShape(t)
+                    inProgress.updateShape(e)
                 }
                 push(down.position.x, down.position.y, down.pressure)
                 active = true; version++
@@ -240,21 +246,31 @@ private fun FallbackWetLayer(
                     val event = awaitPointerEvent()
                     val ch = event.changes.firstOrNull { it.id == down.id } ?: break
                     if (!ch.pressed) break
-                    t++
                     push(ch.position.x, ch.position.y, ch.pressure)
                     version++
                     ch.consume()
                 }
                 inProgress.finishInput()
-                inProgress.updateShape(t)
+                // let the model fully settle so the committed stroke matches the wet one
+                var guard = 0
+                do {
+                    inProgress.updateShape(SystemClock.uptimeMillis() - startMs[0] + guard * 16L)
+                    guard++
+                } while (inProgress.isUpdateNeeded() && guard < 120)
                 onFinish(inProgress.toImmutable())
                 active = false; version++
             }
         },
     ) {
         Canvas(Modifier.fillMaxSize()) {
-            version // redraw as the in-progress stroke grows
-            if (active) renderer.draw(drawContext.canvas.nativeCanvas, inProgress, transform)
+            version // redraw as the in-progress stroke grows / settles
+            if (active) {
+                try {
+                    renderer.draw(drawContext.canvas.nativeCanvas, inProgress, transform)
+                } catch (e: Throwable) {
+                    android.util.Log.e("InkWet", "fallback draw failed", e)
+                }
+            }
         }
     }
 }
