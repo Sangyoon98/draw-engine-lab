@@ -23,6 +23,13 @@ struct Stroke {
     float r = 0, g = 0, b = 0, a = 1;
     float base = 9.f;
     std::vector<Pt> pts;
+    // Retained GL geometry (Samsung-style dry cache): committed strokes are
+    // tessellated once and kept in their own GL buffer, so onDrawFrame no longer
+    // re-smooths/re-uploads every stroke each frame. Verts are world-space; the
+    // vertex shader applies u_scale/u_off, so zoom stays sharp (vectors, not raster).
+    GLuint vbo = 0;
+    GLsizei vcount = 0;
+    bool dirty = true;
 };
 
 // pen kinds (must match Kotlin GlPen ordinals)
@@ -173,10 +180,19 @@ std::vector<float> halfWidths(const std::vector<Pt>& sm, int kind, float base) {
     return sw;
 }
 
-void drawStroke(const Stroke& st) {
+void deleteStrokeGL(Stroke& st) {
+    if (st.vbo) { glDeleteBuffers(1, &st.vbo); st.vbo = 0; }
+    st.vcount = 0;
+}
+
+// (Re)tessellate a stroke into its own GL buffer. Runs once per committed stroke
+// (and every frame only for the in-progress one, which is marked dirty on move).
+void ensureCache(Stroke& st) {
+    if (!st.dirty && st.vbo) return;
+    st.dirty = false;
     std::vector<Pt> s = smoothStroke(st.pts);
     size_t n = s.size();
-    if (n < 2) return;
+    if (n < 2) { st.vcount = 0; return; }
     std::vector<float> hw = halfWidths(s, st.kind, st.base);
 
     // per-point normal (perp to the local tangent)
@@ -200,11 +216,21 @@ void drawStroke(const Stroke& st) {
         float bRx = s[i + 1].x + nx[i + 1] * hw[i + 1], bRy = s[i + 1].y + ny[i + 1] * hw[i + 1];
         v.insert(v.end(), {aLx, aLy, aRx, aRy, bLx, bLy, aRx, aRy, bRx, bRy, bLx, bLy});
     }
-    glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
-    glBufferData(GL_ARRAY_BUFFER, v.size() * sizeof(float), v.data(), GL_DYNAMIC_DRAW);
+    if (!st.vbo) glGenBuffers(1, &st.vbo);
+    glBindBuffer(GL_ARRAY_BUFFER, st.vbo);
+    // in-progress stroke re-uploads each move; committed strokes upload once.
+    glBufferData(GL_ARRAY_BUFFER, v.size() * sizeof(float), v.data(),
+                 (&st == g_current) ? GL_DYNAMIC_DRAW : GL_STATIC_DRAW);
+    st.vcount = (GLsizei)(v.size() / 2);
+}
+
+void drawStroke(Stroke& st) {
+    ensureCache(st);
+    if (st.vcount == 0) return;
+    glBindBuffer(GL_ARRAY_BUFFER, st.vbo);
     glEnableVertexAttribArray(g_aPos);
     glVertexAttribPointer(g_aPos, 2, GL_FLOAT, GL_FALSE, 0, nullptr);
-    GLsizei count = (GLsizei)(v.size() / 2);
+    GLsizei count = st.vcount;
 
     float a = st.a;
     if (st.kind == HIGHLIGHTER) a *= 0.30f;
@@ -240,7 +266,7 @@ void eraseAt(float x, float y) {
             float dx = pt.x - x, dy = pt.y - y;
             if (dx * dx + dy * dy < R * R) { hit = true; break; }
         }
-        if (hit) it = g_strokes.erase(it); else ++it;
+        if (hit) { deleteStrokeGL(*it); it = g_strokes.erase(it); } else ++it;
     }
 }
 
@@ -254,6 +280,8 @@ JNIF(onSurfaceCreated)(JNIEnv*, jobject) {
     buildProgram();
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    // GL context recreated → old buffer names are invalid; drop them and re-cache.
+    for (auto& s : g_strokes) { s.vbo = 0; s.dirty = true; }
 }
 
 JNIF(onSurfaceChanged)(JNIEnv*, jobject, jint w, jint h) {
@@ -272,7 +300,7 @@ JNIF(onDrawFrame)(JNIEnv*, jobject) {
     // g_current is already inside g_strokes (pushed in down()), so the loop
     // draws the in-progress stroke too — drawing it again here would double-blend
     // translucent pens (highlighter looked darker while wet, lighter on release).
-    for (const auto& s : g_strokes) drawStroke(s);
+    for (auto& s : g_strokes) drawStroke(s);
 }
 
 JNIF(setPen)(JNIEnv*, jobject, jint pen) { g_pen = pen; }
@@ -292,7 +320,7 @@ JNIF(down)(JNIEnv*, jobject, jfloat x, jfloat y, jfloat p) {
 JNIF(move)(JNIEnv*, jobject, jfloat x, jfloat y, jfloat p) {
     float wx = (x - g_offX) / g_scale, wy = (y - g_offY) / g_scale;
     if (g_pen == ERASER_OBJECT) { eraseAt(wx, wy); return; }
-    if (g_current) g_current->pts.push_back({wx, wy, p});
+    if (g_current) { g_current->pts.push_back({wx, wy, p}); g_current->dirty = true; }
 }
 
 JNIF(setView)(JNIEnv*, jobject, jfloat scale, jfloat offX, jfloat offY) {
@@ -304,16 +332,17 @@ JNIF(resetView)(JNIEnv*, jobject) {
 }
 
 JNIF(up)(JNIEnv*, jobject) {
-    if (g_current && g_current->pts.size() < 2) g_strokes.pop_back();
+    if (g_current && g_current->pts.size() < 2) { deleteStrokeGL(g_strokes.back()); g_strokes.pop_back(); }
     g_current = nullptr;
 }
 
 JNIF(undo)(JNIEnv*, jobject) {
     g_current = nullptr;
-    if (!g_strokes.empty()) g_strokes.pop_back();
+    if (!g_strokes.empty()) { deleteStrokeGL(g_strokes.back()); g_strokes.pop_back(); }
 }
 
 JNIF(clearAll)(JNIEnv*, jobject) {
+    for (auto& s : g_strokes) deleteStrokeGL(s);
     g_strokes.clear();
     g_current = nullptr;
 }
