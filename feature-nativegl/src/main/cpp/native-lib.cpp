@@ -248,7 +248,7 @@ void eraseAt(float x, float y) {
 
 extern "C" {
 
-#define JNIF(name) JNIEXPORT void JNICALL Java_com_example_inksamnotedemo_nativegl_NativeGlBridge_##name
+#define JNIF(name) JNIEXPORT void JNICALL Java_com_example_drawenginelab_nativegl_NativeGlBridge_##name
 
 JNIF(onSurfaceCreated)(JNIEnv*, jobject) {
     buildProgram();
