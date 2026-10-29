@@ -40,10 +40,12 @@ import androidx.compose.ui.input.pointer.PointerType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
 import com.example.drawenginelab.core.CanvasTransform
-import com.example.drawenginelab.core.ColorDot
+import com.example.drawenginelab.core.PenOptionsRow
+import com.example.drawenginelab.core.RichTextEditController
+import com.example.drawenginelab.core.TextFormatBar
+import com.example.drawenginelab.core.TextLayer
+import com.example.drawenginelab.core.TextLayerState
 import com.example.drawenginelab.core.PALETTE
-import com.example.drawenginelab.core.SIZES
-import com.example.drawenginelab.core.SizeDot
 import com.example.drawenginelab.core.TitleBar
 import com.example.drawenginelab.core.ToolChip
 import com.example.drawenginelab.core.ZoomPanBox
@@ -301,14 +303,25 @@ private fun widths(kind: PenKind, base: Float, sm: List<SPoint>): FloatArray {
 
 private fun DrawScope.renderStroke(s: NStroke) {
     if (s.pts.isEmpty()) return
+    // translucent pens (not the highlighter/pencil which already blend per-dab): draw opaque
+    // into a layer, then composite once — overlapping segments would otherwise stack alpha
+    val layered = s.color.alpha < 1f && s.kind != PenKind.HIGHLIGHTER && s.kind != PenKind.PENCIL
+    if (layered) {
+        drawContext.canvas.saveLayer(Rect(Offset.Zero, size), Paint().apply { alpha = s.color.alpha })
+        renderKind(s, s.color.copy(alpha = 1f))
+        drawContext.canvas.restore()
+    } else renderKind(s, s.color)
+}
+
+private fun DrawScope.renderKind(s: NStroke, color: Color) {
     val (sm, w) = s.render()
     when (s.kind) {
-        PenKind.HIGHLIGHTER -> constPath(sm, s.color.copy(alpha = 0.30f), s.base * 3.5f, StrokeCap.Square)
-        PenKind.MARKER -> constPath(sm, s.color, s.base * 2.3f, StrokeCap.Square)
+        PenKind.HIGHLIGHTER -> constPath(sm, s.color.copy(alpha = 0.30f * s.color.alpha), s.base * 3.5f, StrokeCap.Square)
+        PenKind.MARKER -> constPath(sm, color, s.base * 2.3f, StrokeCap.Square)
         PenKind.PENCIL -> pencil(s, sm, w)
         PenKind.ERASER_PIXEL -> clearPath(sm, s.base * 2.5f)
         PenKind.ERASER_OBJECT -> Unit
-        else -> variableWidth(s.color, sm, w)
+        else -> variableWidth(color, sm, w)
     }
 }
 
@@ -356,7 +369,7 @@ private fun DrawScope.pencil(s: NStroke, sm: List<SPoint>, w: FloatArray) {
             val jx = (rnd.nextFloat() - 0.5f) * spread
             val jy = (rnd.nextFloat() - 0.5f) * spread
             drawCircle(
-                color = s.color.copy(alpha = 0.20f * pr),
+                color = s.color.copy(alpha = 0.20f * pr * s.color.alpha),
                 radius = r,
                 center = Offset(a.x + (b.x - a.x) * f + jx, a.y + (b.y - a.y) * f + jy),
             )
@@ -371,6 +384,7 @@ fun CanvasToolbar(
     pen: PenKind, color: Color, size: Float,
     onPen: (PenKind) -> Unit, onColor: (Color) -> Unit, onSize: (Float) -> Unit,
     onUndo: () -> Unit, onRedo: () -> Unit, onClear: () -> Unit, onResetView: () -> Unit, onBack: () -> Unit,
+    textMode: Boolean = false, onText: () -> Unit = {}, extraRow: @Composable () -> Unit = {},
 ) {
     Column(Modifier.fillMaxWidth().background(Color(0xFFF2F2F2)).padding(vertical = 4.dp)) {
         Row(
@@ -378,7 +392,8 @@ fun CanvasToolbar(
             horizontalArrangement = Arrangement.spacedBy(4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            PenKind.entries.forEach { k -> ToolChip(k.label, pen == k) { onPen(k) } }
+            PenKind.entries.forEach { k -> ToolChip(k.label, !textMode && pen == k) { onPen(k) } }
+            ToolChip("텍스트", textMode, onText)
             Spacer(Modifier.width(8.dp))
             ToolChip("되돌리기", false, onUndo)
             ToolChip("다시", false, onRedo)
@@ -388,15 +403,8 @@ fun CanvasToolbar(
             ToolChip("뒤로", false, onBack)
         }
         Spacer(Modifier.size(6.dp))
-        Row(
-            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            PALETTE.forEach { c -> ColorDot(c, selected = c == color) { onColor(c) } }
-            Spacer(Modifier.width(10.dp))
-            SIZES.forEach { s -> SizeDot(s, selected = s == size, color = color) { onSize(s) } }
-        }
+        PenOptionsRow(color, size, onColor, onSize)
+        extraRow()
     }
 }
 
@@ -411,7 +419,10 @@ fun CanvasScreen(onBack: () -> Unit) {
     val transform = remember { CanvasTransform() }
     var pen by remember { mutableStateOf(PenKind.FOUNTAIN) }
     var color by remember { mutableStateOf(PALETTE[0]) }
-    var size by remember { mutableStateOf(SIZES[1]) }
+    var size by remember { mutableStateOf(8f) }
+    var textMode by remember { mutableStateOf(false) }
+    val texts = remember { TextLayerState() }
+    val editor = remember { RichTextEditController() }
 
     val airGate = remember { longArrayOf(0L) }
     val spenOn = rememberSPen(
@@ -423,9 +434,15 @@ fun CanvasScreen(onBack: () -> Unit) {
         TitleBar("Canvas 버전 (삼성노트식 · 6펜)" + if (spenOn) "  ·  S펜 연결됨" else "")
         CanvasToolbar(
             pen = pen, color = color, size = size,
-            onPen = { pen = it }, onColor = { color = it }, onSize = { size = it },
-            onUndo = controller::undo, onRedo = controller::redo, onClear = controller::clear,
+            onPen = { pen = it; textMode = false }, onColor = { color = it }, onSize = { size = it },
+            onUndo = controller::undo, onRedo = controller::redo, onClear = { controller.clear(); texts.clear() },
             onResetView = transform::reset, onBack = onBack,
+            textMode = textMode, onText = { textMode = true },
+            extraRow = {
+                if (textMode) {
+                    TextFormatBar(editor, color, onDone = { texts.commit(editor) }, onDelete = texts::deleteEditing)
+                }
+            },
         )
         ZoomPanBox(transform, Modifier.fillMaxWidth().weight(1f)) {
             NativeCanvas(
@@ -433,6 +450,9 @@ fun CanvasScreen(onBack: () -> Unit) {
                 pen = pen, color = color, size = size,
                 modifier = Modifier.fillMaxSize().background(Color.White),
             )
+            // Android text stack (Spannable + StaticLayout) as its own unbaked layer above the
+            // stroke bitmap: text stays vector-sharp under zoom even though strokes are raster.
+            TextLayer(texts, textMode, editor, Modifier.fillMaxSize())
         }
     }
 }

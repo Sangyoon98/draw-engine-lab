@@ -10,14 +10,21 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculateCentroid
 import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -31,6 +38,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
@@ -107,6 +115,56 @@ fun SizeDot(size: Float, selected: Boolean, color: Color, onClick: () -> Unit) {
                 .background(color),
         )
     }
+}
+
+/**
+ * Shared color/size row for all three engines: palette + hue spectrum, opacity and a
+ * continuous width slider. Opacity rides in [color]'s alpha, so engines just honor alpha.
+ */
+@Composable
+fun PenOptionsRow(color: Color, size: Float, onColor: (Color) -> Unit, onSize: (Float) -> Unit) {
+    val opaque = color.copy(alpha = 1f)
+    Row(
+        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        PALETTE.forEach { c -> ColorDot(c, selected = c == opaque) { onColor(c.copy(alpha = color.alpha)) } }
+        HueBar { onColor(it.copy(alpha = color.alpha)) }
+        Text("투명도", fontSize = 12.sp)
+        Slider(
+            value = color.alpha, onValueChange = { onColor(opaque.copy(alpha = it)) },
+            valueRange = 0.1f..1f, modifier = Modifier.width(120.dp),
+        )
+        Text("굵기 ${size.toInt()}", fontSize = 12.sp)
+        Slider(value = size, onValueChange = onSize, valueRange = 2f..40f, modifier = Modifier.width(160.dp))
+        SizeDot(size, selected = true, color = color) {}
+    }
+}
+
+private val HUES = List(7) { Color.hsv(it * 60f % 360f, 1f, 0.9f) }
+
+/** Tap/drag along the bar to pick a hue (full saturation). */
+@Composable
+private fun HueBar(onPick: (Color) -> Unit) {
+    val pick by rememberUpdatedState(onPick)
+    Box(
+        Modifier
+            .size(width = 160.dp, height = 28.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(Brush.horizontalGradient(HUES))
+            .pointerInput(Unit) {
+                awaitEachGesture {
+                    val down = awaitFirstDown()
+                    fun emit(x: Float) = pick(Color.hsv((x / size.width).coerceIn(0f, 1f) * 359f, 1f, 0.9f))
+                    emit(down.position.x)
+                    do {
+                        val e = awaitPointerEvent()
+                        e.changes.firstOrNull()?.let { emit(it.position.x); it.consume() }
+                    } while (e.changes.any { it.pressed })
+                }
+            },
+    )
 }
 
 @Composable

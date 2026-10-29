@@ -17,4 +17,15 @@ object NativeGlBridge {
     external fun up()
     external fun undo()
     external fun clearAll()
+
+    // native text objects (world units; thread-safe on the native side)
+    external fun textAdd(x: Float, y: Float, w: Float, h: Float, text: String, spans: IntArray): Int
+    external fun textUpdate(id: Int, h: Float, text: String, spans: IntArray)
+    external fun textMove(id: Int, x: Float, y: Float)
+    external fun textRemove(id: Int)
+    external fun textSetHidden(id: Int)
+    external fun textHit(x: Float, y: Float): Int
+    external fun textGet(id: Int): String
+    external fun textSpans(id: Int): IntArray
+    external fun textRect(id: Int): FloatArray
 }

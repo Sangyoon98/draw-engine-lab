@@ -4,7 +4,7 @@
 ## 1. 개요
 삼성노트식 필기/드로잉을 세 방식으로 구현해 비교한다.
 - 전제: **삼성노트는 자체 C++(NDK) 엔진**으로 구현(역공학 분석 문서 참고). 세 버전은 전부 **클린룸**(삼성 코드 복제 아님).
-- 공통 기능: 펜 여러 종 · 6색 · 굵기 4단 · 획/픽셀 지우개 · 되돌리기/다시/전체삭제 · 핀치 확대·이동.
+- 공통 기능: 펜 여러 종 · 6색 + 색 스펙트럼 · 투명도 · 굵기 연속(2~40) · 획/픽셀 지우개 · 되돌리기/다시/전체삭제 · 핀치 확대·이동.
 
 ## 2. 버전별 정의/구현
 
@@ -53,3 +53,15 @@
 - **Canvas** = 호환성·안정 최강, 베이킹으로 빠름, 대신 확대 시 품질 저하(래스터).
 - **NDK GL** = 품질 + 호환 + 확대 선명 + 성능의 **균형**, 대신 C++ 유지비.
 - **권고(스마트러닝 관점)**: 당장은 Canvas(검증·전 기기)가 합리적. 필기 품질이 핵심 가치가 되면 NDK(전 기기+품질, 투자 필요) 또는 Ink(신형 타겟·정식 안정화 후). Ink는 정식화 전까지 프로덕션 전환은 성급.
+
+## 6. 텍스트(키보드 입력) 구현 비교
+삼성 노트 텍스트는 네이티브다(`libSPenDrawing`): 리치 텍스트 모델(`ObjectTextLayout`, `RichTextSpan` — Bold/Italic/FontSize/FontName/Foreground·BackgroundColor/HyperText, `*Paragraph` — Alignment/Bullet/IndentLevel/LineSpacing)을 C++이 들고, `ObjectTextDrawing`이 Skia(`SkCanvas`→`SkBitmap`)로 래스터해 GL 장면에 합성, 줌 시 `updateBitmap(scale)`로 재래스터. 편집(IME)은 Java 레이어.
+
+| 버전 | 모델 | 렌더 | 비고 |
+|---|---|---|---|
+| Canvas | Kotlin `Spanned` | 플랫폼 텍스트 스택(`StaticLayout`)을 **획 비트맵과 분리된 레이어**에 직접 draw | 획은 래스터지만 텍스트는 확대해도 선명 |
+| Ink | Kotlin `Spanned` | Canvas와 같은 텍스트 레이어(Ink API는 텍스트 미지원) | Ink 획 위에 별도 레이어 |
+| NDK | **C++ 객체**(텍스트 + 스팬 리스트 `[type,start,end,value]*`), 획과 한 객체 순서(z·undo 공유) | JNI 콜백으로 플랫폼 텍스트 스택이 비트맵 래스터 → **GL 텍스처** 합성, 줌 0.5단계마다 재래스터 | 삼성 구조 재현. NDK엔 공개 Skia/텍스트 API가 없어 글리프만 플랫폼이 담당 |
+
+공통 편집기: `EditText` + Spannable(한글 IME 조합, 선택 핸들) — 삼성과 동일하게 편집은 Java, 모델은 각 엔진.
+- 한계: Canvas/Ink 텍스트는 undo 스택에 안 들어감(박스 삭제 버튼으로 제거). NDK는 추가만 undo 대상(수정·이동은 미포함).

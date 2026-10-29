@@ -48,10 +48,12 @@ import androidx.ink.strokes.MutableStrokeInputBatch
 import androidx.ink.strokes.Stroke
 import androidx.ink.strokes.StrokeInput
 import androidx.compose.ui.platform.LocalContext
-import com.example.drawenginelab.core.ColorDot
+import com.example.drawenginelab.core.PenOptionsRow
+import com.example.drawenginelab.core.RichTextEditController
+import com.example.drawenginelab.core.TextFormatBar
+import com.example.drawenginelab.core.TextLayer
+import com.example.drawenginelab.core.TextLayerState
 import com.example.drawenginelab.core.PALETTE
-import com.example.drawenginelab.core.SIZES
-import com.example.drawenginelab.core.SizeDot
 import com.example.drawenginelab.core.TitleBar
 import com.example.drawenginelab.core.ToolChip
 import com.example.drawenginelab.core.ZoomPanBox
@@ -72,7 +74,7 @@ enum class InkPen(val label: String) {
 
 fun brushForInk(pen: InkPen, color: Color, size: Float): Brush = when (pen) {
     InkPen.MARKER -> Brush.createWithComposeColor(StockBrushes.marker(), color, size * 1.8f, 0.1f)
-    InkPen.HIGHLIGHTER -> Brush.createWithComposeColor(StockBrushes.highlighter(), color.copy(alpha = 0.3f), size * 3.5f, 0.1f)
+    InkPen.HIGHLIGHTER -> Brush.createWithComposeColor(StockBrushes.highlighter(), color.copy(alpha = 0.3f * color.alpha), size * 3.5f, 0.1f)
     InkPen.DASHED -> Brush.createWithComposeColor(StockBrushes.dashedLine(), color, size, 0.1f)
     else -> Brush.createWithComposeColor(StockBrushes.pressurePen(), color, size, 0.1f)
 }
@@ -289,6 +291,7 @@ fun InkToolbar(
     pen: InkPen, color: Color, size: Float,
     onPen: (InkPen) -> Unit, onColor: (Color) -> Unit, onSize: (Float) -> Unit,
     onUndo: () -> Unit, onRedo: () -> Unit, onClear: () -> Unit, onResetView: () -> Unit, onBack: () -> Unit,
+    textMode: Boolean = false, onText: () -> Unit = {}, extraRow: @Composable () -> Unit = {},
 ) {
     Column(Modifier.fillMaxWidth().background(Color(0xFFF2F2F2)).padding(vertical = 4.dp)) {
         Row(
@@ -296,7 +299,8 @@ fun InkToolbar(
             horizontalArrangement = Arrangement.spacedBy(4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            InkPen.entries.forEach { p -> ToolChip(p.label, pen == p) { onPen(p) } }
+            InkPen.entries.forEach { p -> ToolChip(p.label, !textMode && pen == p) { onPen(p) } }
+            ToolChip("텍스트", textMode, onText)
             Spacer(Modifier.width(8.dp))
             ToolChip("되돌리기", false, onUndo)
             ToolChip("다시", false, onRedo)
@@ -306,15 +310,8 @@ fun InkToolbar(
             ToolChip("뒤로", false, onBack)
         }
         Spacer(Modifier.size(6.dp))
-        Row(
-            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            PALETTE.forEach { c -> ColorDot(c, selected = c == color) { onColor(c) } }
-            Spacer(Modifier.width(10.dp))
-            SIZES.forEach { s -> SizeDot(s, selected = s == size, color = color) { onSize(s) } }
-        }
+        PenOptionsRow(color, size, onColor, onSize)
+        extraRow()
     }
 }
 
@@ -329,8 +326,11 @@ fun InkScreen(onBack: () -> Unit) {
     val transform = remember { CanvasTransform() }
     var pen by remember { mutableStateOf(InkPen.PEN) }
     var color by remember { mutableStateOf(PALETTE[0]) }
-    var size by remember { mutableStateOf(SIZES[1]) }
+    var size by remember { mutableStateOf(8f) }
     val renderer = remember { CanvasStrokeRenderer.create() }
+    var textMode by remember { mutableStateOf(false) }
+    val texts = remember { TextLayerState() }
+    val editor = remember { RichTextEditController() }
     val brush = remember(pen, color, size) { brushForInk(pen, color, size) }
 
     val airGate = remember { longArrayOf(0L) }
@@ -343,9 +343,15 @@ fun InkScreen(onBack: () -> Unit) {
         TitleBar("Ink API 버전" + if (spenOn) "  ·  S펜 연결됨" else "")
         InkToolbar(
             pen = pen, color = color, size = size,
-            onPen = { pen = it }, onColor = { color = it }, onSize = { size = it },
-            onUndo = state::undo, onRedo = state::redo, onClear = state::clear,
+            onPen = { pen = it; textMode = false }, onColor = { color = it }, onSize = { size = it },
+            onUndo = state::undo, onRedo = state::redo, onClear = { state.clear(); texts.clear() },
             onResetView = transform::reset, onBack = onBack,
+            textMode = textMode, onText = { textMode = true },
+            extraRow = {
+                if (textMode) {
+                    TextFormatBar(editor, color, onDone = { texts.commit(editor) }, onDelete = texts::deleteEditing)
+                }
+            },
         )
         ZoomPanBox(transform, Modifier.fillMaxWidth().weight(1f)) {
             InkCanvas(
@@ -355,6 +361,9 @@ fun InkScreen(onBack: () -> Unit) {
                 renderer = renderer,
                 modifier = Modifier.fillMaxSize().background(Color.White),
             )
+            // Ink has no text API (strokes only), so text is a platform text layer on top —
+            // the same objects Compose/Views use, sharp under zoom.
+            TextLayer(texts, textMode, editor, Modifier.fillMaxSize())
         }
     }
 }

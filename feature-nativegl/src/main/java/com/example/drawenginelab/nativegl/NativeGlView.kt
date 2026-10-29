@@ -62,9 +62,29 @@ class NativeGlView(context: Context) : GLSurfaceView(context) {
 
     // view pan/zoom (mirrors the native u_scale/u_off); 1 finger draws, 2 fingers transform
     private var mode = 0 // 0 none, 1 draw, 2 transform
-    private var vScale = 1f
-    private var vOffX = 0f
-    private var vOffY = 0f
+    var vScale = 1f
+        private set
+    var vOffX = 0f
+        private set
+    var vOffY = 0f
+        private set
+
+    /** Fires (scale, offX, offY) whenever the view transform changes, so overlays can follow. */
+    var onViewChanged: ((Float, Float, Float) -> Unit)? = null
+
+    // text mode: one finger taps (open/create a box) or drags a box; strokes are not drawn
+    var textMode = false
+    /** (hit text id or -1, world x, world y) on a tap in text mode. */
+    var onTextTap: ((Int, Float, Float) -> Unit)? = null
+    private var textHitId = -1
+    private var textDragged = false
+    private var downX = 0f
+    private var downY = 0f
+    private var lastWx = 0f
+    private var lastWy = 0f
+
+    private fun worldX(x: Float) = (x - vOffX) / vScale
+    private fun worldY(y: Float) = (y - vOffY) / vScale
     private var prevSpan = 0f
     private var prevFx = 0f
     private var prevFy = 0f
@@ -73,12 +93,19 @@ class NativeGlView(context: Context) : GLSurfaceView(context) {
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 mode = 1
-                val x = e.x; val y = e.y; val p = e.pressure
-                queueEvent { NativeGlBridge.down(x, y, p) }
+                if (textMode) {
+                    downX = e.x; downY = e.y
+                    lastWx = worldX(e.x); lastWy = worldY(e.y)
+                    textHitId = NativeGlBridge.textHit(lastWx, lastWy)
+                    textDragged = false
+                } else {
+                    val x = e.x; val y = e.y; val p = e.pressure
+                    queueEvent { NativeGlBridge.down(x, y, p) }
+                }
             }
             MotionEvent.ACTION_POINTER_DOWN -> {
                 if (e.pointerCount >= 2) {
-                    if (mode == 1) queueEvent { NativeGlBridge.up() } // abandon the just-started stroke
+                    if (mode == 1 && !textMode) queueEvent { NativeGlBridge.up() } // abandon the just-started stroke
                     mode = 2
                     prevSpan = span(e)
                     val f = focus(e); prevFx = f[0]; prevFy = f[1]
@@ -97,8 +124,17 @@ class NativeGlView(context: Context) : GLSurfaceView(context) {
                         vScale = ns
                         val s = vScale; val ox = vOffX; val oy = vOffY
                         queueEvent { NativeGlBridge.setView(s, ox, oy) }
+                        onViewChanged?.invoke(s, ox, oy)
                     }
                     prevSpan = span; prevFx = fx; prevFy = fy
+                } else if (mode == 1 && textMode) {
+                    if (textHitId >= 0 && (textDragged || kotlin.math.hypot(e.x - downX, e.y - downY) > 12f)) {
+                        textDragged = true
+                        val wx = worldX(e.x); val wy = worldY(e.y)
+                        val r = NativeGlBridge.textRect(textHitId)
+                        NativeGlBridge.textMove(textHitId, r[0] + wx - lastWx, r[1] + wy - lastWy)
+                        lastWx = wx; lastWy = wy
+                    }
                 } else if (mode == 1) {
                     val batch = ArrayList<FloatArray>(e.historySize + 1)
                     for (h in 0 until e.historySize) {
@@ -112,7 +148,9 @@ class NativeGlView(context: Context) : GLSurfaceView(context) {
                 if (e.pointerCount <= 2) mode = 0 // leaving 2-finger; don't resume drawing this gesture
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                if (mode == 1) queueEvent { NativeGlBridge.up() }
+                if (mode == 1 && textMode) {
+                    if (!textDragged && e.actionMasked == MotionEvent.ACTION_UP) onTextTap?.invoke(textHitId, worldX(e.x), worldY(e.y))
+                } else if (mode == 1) queueEvent { NativeGlBridge.up() }
                 mode = 0
             }
         }
@@ -134,6 +172,7 @@ class NativeGlView(context: Context) : GLSurfaceView(context) {
     fun resetView() {
         vScale = 1f; vOffX = 0f; vOffY = 0f
         queueEvent { NativeGlBridge.resetView() }
+        onViewChanged?.invoke(1f, 0f, 0f)
         requestRender()
     }
 }

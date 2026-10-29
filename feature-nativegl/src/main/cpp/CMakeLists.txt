@@ -8,4 +8,5 @@ find_library(log-lib log)
 target_link_libraries(nativegl
     ${log-lib}
     GLESv2
+    jnigraphics
     android)
