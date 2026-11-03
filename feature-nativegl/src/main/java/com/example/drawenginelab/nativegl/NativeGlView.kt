@@ -169,6 +169,11 @@ class NativeGlView(context: Context) : GLSurfaceView(context) {
     fun setSize(size: Float) { queueEvent { NativeGlBridge.setSize(size) } }
     fun undo() { queueEvent { NativeGlBridge.undo() }; requestRender() }
     fun clearAll() { queueEvent { NativeGlBridge.clearAll() }; requestRender() }
+    /** Reads the stroke list on the GL thread, delivers it on the main thread. */
+    fun exportStrokes(onResult: (FloatArray) -> Unit) {
+        queueEvent { val data = NativeGlBridge.exportStrokes(); post { onResult(data) } }
+    }
+    fun importStrokes(data: FloatArray) { queueEvent { NativeGlBridge.importStrokes(data) }; requestRender() }
     fun resetView() {
         vScale = 1f; vOffX = 0f; vOffY = 0f
         queueEvent { NativeGlBridge.resetView() }

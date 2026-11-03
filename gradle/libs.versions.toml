@@ -35,6 +35,7 @@ androidx-ink-geometry-compose = { group = "androidx.ink", name = "ink-geometry-c
 androidx-ink-nativeloader = { group = "androidx.ink", name = "ink-nativeloader", version.ref = "ink" }
 androidx-ink-rendering = { group = "androidx.ink", name = "ink-rendering", version.ref = "ink" }
 androidx-ink-strokes = { group = "androidx.ink", name = "ink-strokes", version.ref = "ink" }
+androidx-ink-storage = { group = "androidx.ink", name = "ink-storage", version.ref = "ink" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

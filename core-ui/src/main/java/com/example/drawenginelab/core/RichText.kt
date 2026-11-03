@@ -51,6 +51,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import com.example.drawenginelab.notefile.NoteText
 import kotlin.math.hypot
 import kotlin.math.roundToInt
 
@@ -282,6 +283,18 @@ class TextLayerState {
 
     fun deleteEditing() { editing?.let { boxes.remove(it) }; editing = null }
     fun clear() { boxes.clear(); editing = null }
+
+    fun toNoteTexts(): List<NoteText> = boxes.map { b ->
+        val s = SpannableStringBuilder(b.text)
+        NoteText(b.x, b.y, b.width.toFloat(), s.toString(), RichTextCodec.encode(s))
+    }
+
+    fun load(texts: List<NoteText>, scale: Float) {
+        clear()
+        texts.forEach { t ->
+            boxes += TextBox(nextId++, t.x * scale, t.y * scale, t.width.toInt(), RichTextCodec.decode(t.text, t.spans))
+        }
+    }
 }
 
 /**

@@ -41,6 +41,13 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
 import com.example.drawenginelab.core.CanvasTransform
 import com.example.drawenginelab.core.PenOptionsRow
+import com.example.drawenginelab.core.rememberNoteFileActions
+import com.example.drawenginelab.notefile.InkNoteFile
+import com.example.drawenginelab.notefile.SmartLearningJson
+import android.widget.Toast
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.IntSize
 import com.example.drawenginelab.core.RichTextEditController
 import com.example.drawenginelab.core.TextFormatBar
 import com.example.drawenginelab.core.TextLayer
@@ -142,6 +149,7 @@ class NativeDrawController {
     fun undo() { if (strokes.isNotEmpty()) { undone.add(strokes.removeAt(strokes.lastIndex)); bump(); sceneVersion++ } }
     fun redo() { if (undone.isNotEmpty()) { strokes.add(undone.removeAt(undone.lastIndex)); bump(); sceneVersion++ } }
     fun clear() { if (strokes.isNotEmpty() || current != null) { strokes.clear(); undone.clear(); current = null; bump(); sceneVersion++ } }
+    internal fun replaceAll(list: List<NStroke>) { strokes.clear(); strokes.addAll(list); undone.clear(); current = null; bump(); sceneVersion++ }
 
     companion object { const val ERASE_PAD = 24f }
 }
@@ -385,6 +393,7 @@ fun CanvasToolbar(
     onPen: (PenKind) -> Unit, onColor: (Color) -> Unit, onSize: (Float) -> Unit,
     onUndo: () -> Unit, onRedo: () -> Unit, onClear: () -> Unit, onResetView: () -> Unit, onBack: () -> Unit,
     textMode: Boolean = false, onText: () -> Unit = {}, extraRow: @Composable () -> Unit = {},
+    onSave: (() -> Unit)? = null, onOpen: (() -> Unit)? = null,
 ) {
     Column(Modifier.fillMaxWidth().background(Color(0xFFF2F2F2)).padding(vertical = 4.dp)) {
         Row(
@@ -399,6 +408,8 @@ fun CanvasToolbar(
             ToolChip("다시", false, onRedo)
             ToolChip("전체삭제", false, onClear)
             Spacer(Modifier.width(8.dp))
+            onSave?.let { ToolChip("저장", false, it) }
+            onOpen?.let { ToolChip("불러오기", false, it) }
             ToolChip("화면맞춤", false, onResetView)
             ToolChip("뒤로", false, onBack)
         }
@@ -423,6 +434,17 @@ fun CanvasScreen(onBack: () -> Unit) {
     var textMode by remember { mutableStateOf(false) }
     val texts = remember { TextLayerState() }
     val editor = remember { RichTextEditController() }
+    var canvasSize by remember { mutableStateOf(IntSize.Zero) }
+    val context = LocalContext.current
+    // opens smartlearning JSON (its own format) and Ink note files (converted to Canvas pens)
+    val files = rememberNoteFileActions { bytes, _ ->
+        val doc = if (InkNoteFile.looksLike(bytes)) InkNoteFile.toNoteDoc(InkNoteFile.read(bytes))
+        else SmartLearningJson.read(String(bytes, Charsets.UTF_8))
+        val scale = doc.scaleFor(canvasSize.width.toFloat(), canvasSize.height.toFloat())
+        controller.load(doc, scale)
+        texts.load(doc.texts, scale)
+        transform.reset()
+    }
 
     val airGate = remember { longArrayOf(0L) }
     val spenOn = rememberSPen(
@@ -438,13 +460,20 @@ fun CanvasScreen(onBack: () -> Unit) {
             onUndo = controller::undo, onRedo = controller::redo, onClear = { controller.clear(); texts.clear() },
             onResetView = transform::reset, onBack = onBack,
             textMode = textMode, onText = { textMode = true },
+            onSave = {
+                texts.commit(editor)
+                val doc = controller.toNoteDoc(canvasSize.width.toFloat(), canvasSize.height.toFloat())
+                if (texts.boxes.isNotEmpty()) Toast.makeText(context, "스마트러닝 형식은 텍스트를 저장하지 않음", Toast.LENGTH_SHORT).show()
+                files.save("smartlearning_note", "json", SmartLearningJson.write(doc).toByteArray(Charsets.UTF_8))
+            },
+            onOpen = files.open,
             extraRow = {
                 if (textMode) {
                     TextFormatBar(editor, color, onDone = { texts.commit(editor) }, onDelete = texts::deleteEditing)
                 }
             },
         )
-        ZoomPanBox(transform, Modifier.fillMaxWidth().weight(1f)) {
+        ZoomPanBox(transform, Modifier.fillMaxWidth().weight(1f).onSizeChanged { canvasSize = it }) {
             NativeCanvas(
                 controller = controller,
                 pen = pen, color = color, size = size,

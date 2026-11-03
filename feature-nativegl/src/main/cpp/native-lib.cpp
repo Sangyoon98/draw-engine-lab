@@ -543,6 +543,41 @@ JNIF(clearAll)(JNIEnv*, jobject) {
     while (!g_texts.empty()) dropText(g_texts.end() - 1);
 }
 
+// --- stroke export/import for note files (GL thread) -----------------------------------
+// flat float layout: count, then per stroke: kind, r, g, b, a, base, n, (x, y, pressure) × n
+
+JNIR(jfloatArray, exportStrokes)(JNIEnv* env, jobject) {
+    std::vector<float> out{(float)g_strokes.size()};
+    for (const auto& s : g_strokes) {
+        out.insert(out.end(), {(float)s.kind, s.r, s.g, s.b, s.a, s.base, (float)s.pts.size()});
+        for (const Pt& p : s.pts) out.insert(out.end(), {p.x, p.y, p.p});
+    }
+    jfloatArray a = env->NewFloatArray((jsize)out.size());
+    env->SetFloatArrayRegion(a, 0, (jsize)out.size(), out.data());
+    return a;
+}
+
+// replaces all strokes (texts are kept); same layout as exportStrokes
+JNIF(importStrokes)(JNIEnv* env, jobject, jfloatArray data) {
+    std::vector<float> in(env->GetArrayLength(data));
+    env->GetFloatArrayRegion(data, 0, (jsize)in.size(), in.data());
+    for (auto& s : g_strokes) deleteStrokeGL(s);
+    g_strokes.clear();
+    g_current = nullptr;
+    size_t i = 0;
+    int count = in.empty() ? 0 : (int)in[i++];
+    std::lock_guard<std::mutex> lock(g_textMu); // g_seq is shared with text objects
+    for (int k = 0; k < count && i + 7 <= in.size(); ++k) {
+        Stroke st;
+        st.kind = (int)in[i]; st.r = in[i + 1]; st.g = in[i + 2]; st.b = in[i + 3]; st.a = in[i + 4]; st.base = in[i + 5];
+        size_t n = (size_t)in[i + 6];
+        i += 7;
+        for (size_t j = 0; j < n && i + 3 <= in.size(); ++j, i += 3) st.pts.push_back({in[i], in[i + 1], in[i + 2]});
+        st.seq = ++g_seq;
+        g_strokes.push_back(std::move(st));
+    }
+}
+
 // --- text objects (called from the UI thread; model guarded by g_textMu) ---------------
 
 JNIR(jint, textAdd)(JNIEnv* env, jobject, jfloat x, jfloat y, jfloat w, jfloat h, jstring text, jintArray spans) {

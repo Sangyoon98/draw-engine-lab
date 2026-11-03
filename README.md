@@ -10,7 +10,7 @@
 | **Canvas** | `:feature-canvas` | 순수 Compose Canvas (스마트러닝 렌더 + 삼성노트식 펜 기능 하이브리드) |
 | **NDK GL** | `:feature-nativegl` | 역공학으로 본 삼성 구조를 C++/GLES2로 직접 추측 설계 |
 
-세 버전 모두 동일 기능을 제공한다 — 펜 여러 종 · 6색 + 색 스펙트럼 · 투명도 · 굵기 연속(2~40) · 획/픽셀 지우개 · 되돌리기·다시·전체삭제 · 핀치 확대·이동 · S Pen 지원 · 텍스트 박스(키보드 입력, 굵게·기울임·밑줄·크기·색·정렬·글머리).
+세 버전 모두 동일 기능을 제공한다 — 펜 여러 종 · 6색 + 색 스펙트럼 · 투명도 · 굵기 연속(2~40) · 획/픽셀 지우개 · 되돌리기·다시·전체삭제 · 핀치 확대·이동 · S Pen 지원 · 저장/불러오기(Canvas=스마트러닝 JSON, Ink=Ink 노트, NDK=삼성 노트 .sdocx, 서로 열기 가능) · 텍스트 박스(키보드 입력, 굵게·기울임·밑줄·크기·색·정렬·글머리).
 
 ## 문서
 
@@ -39,7 +39,8 @@
 ```
 DrawEngineLab/
 ├── app/                 진입점 · 홈 화면 · 버전 라우팅
-├── core-ui/             공통 UI(툴바·팔레트·줌팬·S Pen 컨트롤)
+├── core-ui/             공통 UI(툴바·팔레트·줌팬·S Pen 컨트롤·텍스트·파일 선택)
+├── core-notefile/       노트 파일 형식(스마트러닝 JSON · Ink 노트 · 삼성 .sdocx)
 ├── feature-ink/         Ink API 버전
 ├── feature-canvas/      순수 Canvas 버전
 └── feature-nativegl/    NDK GL(C++/GLES2) 버전

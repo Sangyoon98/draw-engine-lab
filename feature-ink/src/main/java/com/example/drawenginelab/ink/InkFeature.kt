@@ -49,6 +49,11 @@ import androidx.ink.strokes.Stroke
 import androidx.ink.strokes.StrokeInput
 import androidx.compose.ui.platform.LocalContext
 import com.example.drawenginelab.core.PenOptionsRow
+import com.example.drawenginelab.core.rememberNoteFileActions
+import com.example.drawenginelab.notefile.InkNoteFile
+import com.example.drawenginelab.notefile.SmartLearningJson
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.unit.IntSize
 import com.example.drawenginelab.core.RichTextEditController
 import com.example.drawenginelab.core.TextFormatBar
 import com.example.drawenginelab.core.TextLayer
@@ -114,6 +119,7 @@ class InkState {
     fun undo() { if (ops.isNotEmpty()) { undone.add(ops.removeAt(ops.lastIndex)); bump() } }
     fun redo() { if (undone.isNotEmpty()) { ops.add(undone.removeAt(undone.lastIndex)); bump() } }
     fun clear() { ops.clear(); undone.clear(); previewClear.clear(); bump() }
+    internal fun replaceAll(list: List<InkOp>) { ops.clear(); ops.addAll(list); undone.clear(); previewClear.clear(); bump() }
 }
 
 @Composable
@@ -292,6 +298,7 @@ fun InkToolbar(
     onPen: (InkPen) -> Unit, onColor: (Color) -> Unit, onSize: (Float) -> Unit,
     onUndo: () -> Unit, onRedo: () -> Unit, onClear: () -> Unit, onResetView: () -> Unit, onBack: () -> Unit,
     textMode: Boolean = false, onText: () -> Unit = {}, extraRow: @Composable () -> Unit = {},
+    onSave: (() -> Unit)? = null, onOpen: (() -> Unit)? = null,
 ) {
     Column(Modifier.fillMaxWidth().background(Color(0xFFF2F2F2)).padding(vertical = 4.dp)) {
         Row(
@@ -306,6 +313,8 @@ fun InkToolbar(
             ToolChip("다시", false, onRedo)
             ToolChip("전체삭제", false, onClear)
             Spacer(Modifier.width(8.dp))
+            onSave?.let { ToolChip("저장", false, it) }
+            onOpen?.let { ToolChip("불러오기", false, it) }
             ToolChip("화면맞춤", false, onResetView)
             ToolChip("뒤로", false, onBack)
         }
@@ -332,6 +341,26 @@ fun InkScreen(onBack: () -> Unit) {
     val texts = remember { TextLayerState() }
     val editor = remember { RichTextEditController() }
     val brush = remember(pen, color, size) { brushForInk(pen, color, size) }
+    var canvasSize by remember { mutableStateOf(IntSize.Zero) }
+    val ctx = LocalContext.current
+    val cmPerUnit = remember(ctx) { 2.54f / ctx.resources.displayMetrics.densityDpi.coerceAtLeast(1) }
+    // opens its own Ink note files and smartlearning JSON
+    val files = rememberNoteFileActions { bytes, _ ->
+        val w = canvasSize.width.toFloat(); val h = canvasSize.height.toFloat()
+        if (InkNoteFile.looksLike(bytes)) {
+            val note = InkNoteFile.read(bytes)
+            val doc = InkNoteFile.toNoteDoc(note)
+            val scale = doc.scaleFor(w, h)
+            state.load(note, scale, cmPerUnit)
+            texts.load(note.texts, scale)
+        } else {
+            val doc = SmartLearningJson.read(String(bytes, Charsets.UTF_8))
+            val scale = doc.scaleFor(w, h)
+            state.load(doc, scale, cmPerUnit)
+            texts.clear()
+        }
+        transform.reset()
+    }
 
     val airGate = remember { longArrayOf(0L) }
     val spenOn = rememberSPen(
@@ -347,13 +376,19 @@ fun InkScreen(onBack: () -> Unit) {
             onUndo = state::undo, onRedo = state::redo, onClear = { state.clear(); texts.clear() },
             onResetView = transform::reset, onBack = onBack,
             textMode = textMode, onText = { textMode = true },
+            onSave = {
+                texts.commit(editor)
+                val note = state.toInkNote(canvasSize.width.toFloat(), canvasSize.height.toFloat(), texts.toNoteTexts())
+                files.save("ink_note", InkNoteFile.EXTENSION, InkNoteFile.write(note))
+            },
+            onOpen = files.open,
             extraRow = {
                 if (textMode) {
                     TextFormatBar(editor, color, onDone = { texts.commit(editor) }, onDelete = texts::deleteEditing)
                 }
             },
         )
-        ZoomPanBox(transform, Modifier.fillMaxWidth().weight(1f)) {
+        ZoomPanBox(transform, Modifier.fillMaxWidth().weight(1f).onSizeChanged { canvasSize = it }) {
             InkCanvas(
                 state = state,
                 pen = pen, color = color, size = size,

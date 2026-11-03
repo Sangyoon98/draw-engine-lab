@@ -25,6 +25,7 @@ dependencyResolutionManagement {
 rootProject.name = "DrawEngineLab"
 include(":app")
 include(":core-ui")
+include(":core-notefile")
 include(":feature-ink")
 include(":feature-canvas")
 include(":feature-nativegl")

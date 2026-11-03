@@ -34,6 +34,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.example.drawenginelab.core.PenOptionsRow
+import com.example.drawenginelab.core.rememberNoteFileActions
+import com.example.drawenginelab.notefile.InkNoteFile
+import com.example.drawenginelab.notefile.SdocxFile
+import com.example.drawenginelab.notefile.SmartLearningJson
 import com.example.drawenginelab.core.RichTextCodec
 import com.example.drawenginelab.core.RichTextEditController
 import com.example.drawenginelab.core.RichTextEditor
@@ -65,6 +69,17 @@ fun NativeGlScreen(onBack: () -> Unit) {
     var editing by remember { mutableStateOf<NdkEdit?>(null) }
     val editor = remember { RichTextEditController() }
     var viewT by remember { mutableStateOf(floatArrayOf(1f, 0f, 0f)) }
+    // Samsung .sdocx is this version's own format; smartlearning JSON / Ink notes open too
+    val files = rememberNoteFileActions { bytes, _ ->
+        val w = view.width.toFloat(); val h = view.height.toFloat()
+        val (doc, scale) = when {
+            SdocxFile.looksLike(bytes) -> SdocxFile.read(bytes).let { it to if (it.width > 0f) w / it.width else 1f } // fit page width
+            InkNoteFile.looksLike(bytes) -> InkNoteFile.toNoteDoc(InkNoteFile.read(bytes)).let { it to it.scaleFor(w, h) }
+            else -> SmartLearningJson.read(String(bytes, Charsets.UTF_8)).let { it to it.scaleFor(w, h) }
+        }
+        view.resetView()
+        view.importStrokes(noteDocToStrokes(doc, scale))
+    }
 
     // push tool state into the native engine (also on first composition)
     LaunchedEffect(pen, color, size) {
@@ -128,6 +143,15 @@ fun NativeGlScreen(onBack: () -> Unit) {
                 Spacer(Modifier.width(8.dp))
                 ToolChip("되돌리기", false) { view.undo() }
                 ToolChip("전체삭제", false) { editing = null; NativeGlBridge.textSetHidden(-1); view.clearAll() }
+                ToolChip("저장", false) {
+                    commit()
+                    view.exportStrokes { data ->
+                        val template = context.assets.open("sdocx_template.sdocx").use { it.readBytes() }
+                        val doc = strokesToNoteDoc(data, view.width.toFloat(), view.height.toFloat())
+                        files.save("samsung_note", SdocxFile.EXTENSION, SdocxFile.write(doc, template))
+                    }
+                }
+                ToolChip("불러오기", false, files.open)
                 ToolChip("화면맞춤", false) { view.resetView() }
                 ToolChip("뒤로", false, onBack)
             }
