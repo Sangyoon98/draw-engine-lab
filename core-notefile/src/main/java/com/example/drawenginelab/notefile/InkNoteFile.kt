@@ -22,7 +22,7 @@ import kotlin.math.hypot
  */
 object InkNoteFile {
     const val FORMAT = "drawenginelab.ink"
-    const val EXTENSION = "inknote"
+    const val EXTENSION = "json" // plain JSON; told apart from smartlearning JSON by its "format" field
 
     sealed interface Item
     class StrokeItem(val family: String, val argb: Int, val size: Float, val epsilon: Float, val inputs: StrokeInputBatch) : Item

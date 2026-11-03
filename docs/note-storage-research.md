@@ -84,11 +84,11 @@
 
 | 버전 | 저장 | 불러오기 |
 |---|---|---|
-| Canvas | **스마트러닝 JSON** (`SmartLearningJson`, 스키마 동일: size/shapes/segments/RGBA/strokeWidth/isEraser/type) | 스마트러닝 JSON, Ink 노트(`.inknote`) |
-| Ink | **Ink 노트** `.inknote` (`InkNoteFile`: 획마다 브러시 + `StrokeInputBatch.encode()` base64, 지우개·텍스트 포함) | Ink 노트, 스마트러닝 JSON |
+| Canvas | **스마트러닝 JSON** (`SmartLearningJson`, 스키마 동일: size/shapes/segments/RGBA/strokeWidth/isEraser/type) | 스마트러닝 JSON, Ink 노트 JSON(`ink_note_*.json`) |
+| Ink | **Ink 노트 JSON** (`ink_note_*.json`, `"format":"drawenginelab.ink"`로 구분) (`InkNoteFile`: 획마다 브러시 + `StrokeInputBatch.encode()` base64, 지우개·텍스트 포함) | Ink 노트, 스마트러닝 JSON |
 | NDK | **삼성 노트 `.sdocx`** (`SdocxFile`) — 삼성 노트 앱에서 열림 확인 | `.sdocx`(삼성 노트에서 내보낸 파일 포함), 스마트러닝 JSON, Ink 노트 |
 
-기기 확인(SM-P610): Canvas → 스마트러닝 JSON 저장 → Ink에서 열림(위치·색·형광펜 투명도·지우개 구멍 동일). Ink → `.inknote` 저장 → Canvas에서 열림(필압 펜·텍스트 포함). 같은 획 기준 JSON 4.7KB / `.inknote` 2.5KB.
+기기 확인(SM-P610): Canvas → 스마트러닝 JSON 저장 → Ink에서 열림(위치·색·형광펜 투명도·지우개 구멍 동일). Ink → Ink 노트 JSON 저장 → Canvas에서 열림(필압 펜·텍스트 포함). 같은 획 기준 스마트러닝 JSON 4.7KB / Ink 노트 JSON 2.5KB.
 - 변환 규칙: 스마트러닝 "Pen" → Canvas 볼펜(최대 필압) / Ink marker, 시간은 거리 기반 합성. 형광펜은 스마트러닝에 종류가 없어 투명도를 색에 구워 저장. 텍스트는 스마트러닝 형식에 저장 안 됨(안내 토스트).
 - 크기 다른 캔버스: 저장 당시 size 기준 비율 유지 스케일(스마트러닝은 x·y 독립 스케일 — 차이 있음).
 
